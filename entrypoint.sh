@@ -63,6 +63,10 @@ user_data="$(
   printf '%s' "${INPUT}" \
   | jq -r '(.params.user_data // .user_data // env.user_data // empty)'
 )"
+project_id="$(
+  printf '%s' "${INPUT}" \
+  | jq -r '(.params.project_id // .project_id // env.project_id // empty)'
+)"
 
 # SSH keys (accepts array in JSON; or comma-separated env string)
 ssh_keys_json="$(
@@ -143,7 +147,7 @@ payload="$(
 )"
 
 # ---------------------------
-# API call
+# Create droplet
 # ---------------------------
 resp="$(
   curl -sS -f -X POST "https://api.digitalocean.com/v2/droplets" \
@@ -169,16 +173,44 @@ region_out="$(printf '%s' "$resp" | jq -r '.droplet.region.slug // empty')"
 size_out="$(printf '%s' "$resp" | jq -r '.droplet.size_slug // empty')"
 image_out="$(printf '%s' "$resp" | jq -r '(.droplet.image.slug // .droplet.image.id // empty)')"
 
+# ---------------------------
+# If project_id provided, move droplet into that project
+# ---------------------------
+if [ -n "${project_id:-}" ]; then
+  echo "Assigning droplet ${droplet_id} to project ${project_id}" >&2
+  assign_payload="$(jq -nc --arg urn "do:droplet:${droplet_id}" '{resources: [$urn]}')"
+  assign_resp="$(
+    curl -sS -f -X POST "https://api.digitalocean.com/v2/projects/${project_id}/resources" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer ${do_access_token}" \
+      -d "${assign_payload}"
+  )" || {
+    echo "Error: failed to assign droplet to project ${project_id}. Response:" >&2
+    echo "${assign_resp:-<empty>}" | jq . >&2 || echo "${assign_resp:-<empty>}" >&2
+    exit 1
+  }
+fi
+
+# ---------------------------
 # Emit canonical state patch for the runner to merge
+# ---------------------------
 name_json="$(jq -Rn --arg n "$droplet_name_out" '$n')"
 region_json="$(jq -Rn --arg r "$region_out" '$r')"
 size_json="$(jq -Rn --arg s "$size_out" '$s')"
 image_json="$(jq -Rn --arg i "$image_out" '$i')"
 
-echo "::starthub:state::{\"droplet\":{\"id\":${droplet_id},\"name\":${name_json},\"region\":${region_json},\"size\":${size_json},\"image\":${image_json}}}"
+if [ -n "${project_id:-}" ]; then
+  proj_json="$(jq -Rn --arg p "$project_id" '$p')"
+  echo "::starthub:state::{\"droplet\":{\"id\":${droplet_id},\"name\":${name_json},\"region\":${region_json},\"size\":${size_json},\"image\":${image_json}},\"project\":{\"id\":${proj_json}}}"
+else
+  echo "::starthub:state::{\"droplet\":{\"id\":${droplet_id},\"name\":${name_json},\"region\":${region_json},\"size\":${size_json},\"image\":${image_json}}}"
+fi
 
 # Pretty log to stderr without interfering with the marker line
 {
   echo "Created droplet:"
   printf '%s\n' "$resp" | jq .
+  if [ -n "${project_id:-}" ]; then
+    echo "Assigned to project: ${project_id}"
+  fi
 } >&2

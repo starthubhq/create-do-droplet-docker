@@ -9,6 +9,11 @@
       "type": "string"
     },
     {
+      "name": "project_id",
+      "description": "ID of the project",
+      "type": "string"
+    },
+    {
       "name": "droplet_name",
       "description": "Name of the droplet to create",
       "type": "string"
