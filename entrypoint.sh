@@ -68,7 +68,7 @@ project_id="$(
   | jq -r '(.params.project_id // .project_id // env.project_id // empty)'
 )"
 
-# SSH keys (accepts array in JSON; or comma-separated env string)
+# SSH keys (array or comma-separated env)
 ssh_keys_json="$(
   keys="$(printf '%s' "${INPUT}" | jq -c '(.params.ssh_keys // .ssh_keys // empty)')" || true
   if [ -n "${keys:-}" ] && [ "${keys}" != "null" ]; then
@@ -84,7 +84,7 @@ ssh_keys_json="$(
   fi
 )"
 
-# Tags (accept array in JSON; or comma-separated env)
+# Tags (array or comma-separated env)
 tags_json="$(
   tjson="$(printf '%s' "${INPUT}" | jq -c '(.params.tags // .tags // empty)')" || true
   if [ -n "${tjson:-}" ] && [ "${tjson}" != "null" ]; then
@@ -163,15 +163,15 @@ if [ $rc -ne 0 ]; then
 fi
 
 # ---------------------------
-# Parse droplet fields
+# Parse droplet fields (coerce id to string for manifest)
 # ---------------------------
-droplet_id="$(printf '%s' "$resp" | jq -r '.droplet.id // empty')"
+droplet_id="$(printf '%s' "$resp" | jq -r '(.droplet.id|tostring) // empty')"
 [ -n "$droplet_id" ] || { echo "Error: could not parse .droplet.id from response" >&2; echo "$resp" | jq . >&2; exit 1; }
 
 droplet_name_out="$(printf '%s' "$resp" | jq -r '.droplet.name // empty')"
 region_out="$(printf '%s' "$resp" | jq -r '.droplet.region.slug // empty')"
 size_out="$(printf '%s' "$resp" | jq -r '.droplet.size_slug // empty')"
-image_out="$(printf '%s' "$resp" | jq -r '(.droplet.image.slug // .droplet.image.id // empty)')"
+image_out="$(printf '%s' "$resp" | jq -r '(.droplet.image.slug // (.droplet.image.id|tostring) // empty)')"
 
 # ---------------------------
 # If project_id provided, move droplet into that project
@@ -192,21 +192,20 @@ if [ -n "${project_id:-}" ]; then
 fi
 
 # ---------------------------
-# Emit canonical state patch for the runner to merge
+# ✅ Emit outputs exactly as manifest declares (flat keys)
 # ---------------------------
+# Use jq -Rn to safely quote strings
 name_json="$(jq -Rn --arg n "$droplet_name_out" '$n')"
 region_json="$(jq -Rn --arg r "$region_out" '$r')"
 size_json="$(jq -Rn --arg s "$size_out" '$s')"
 image_json="$(jq -Rn --arg i "$image_out" '$i')"
+id_json="$(jq -Rn --arg i "$droplet_id" '$i')"
 
-if [ -n "${project_id:-}" ]; then
-  proj_json="$(jq -Rn --arg p "$project_id" '$p')"
-  echo "::starthub:state::{\"droplet\":{\"id\":${droplet_id},\"name\":${name_json},\"region\":${region_json},\"size\":${size_json},\"image\":${image_json}},\"project\":{\"id\":${proj_json}}}"
-else
-  echo "::starthub:state::{\"droplet\":{\"id\":${droplet_id},\"name\":${name_json},\"region\":${region_json},\"size\":${size_json},\"image\":${image_json}}}"
-fi
+echo "::starthub:state::{\"droplet_id\":${id_json},\"droplet_name\":${name_json},\"region\":${region_json},\"size\":${size_json},\"image\":${image_json}}"
 
-# Pretty log to stderr without interfering with the marker line
+# ---------------------------
+# Human-readable logs to STDERR
+# ---------------------------
 {
   echo "Created droplet:"
   printf '%s\n' "$resp" | jq .
